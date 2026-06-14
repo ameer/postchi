@@ -3,17 +3,20 @@ import { Box, Drawer, List, ListItemButton, ListItemText, Fab, Typography, Divid
 import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
+import DeleteIcon from '@mui/icons-material/Delete';
 import SessionForm from './SessionForm';
 import GlobalCookies from './GlobalCookies';
 import LogConsole from './LogConsole';
+import CookieManager from './CookieManager';
 
 const drawerWidth = 320;
 
 export default function App() {
+    const [view, setView] = useState('requests');
     const [sessions, setSessions] = useState([]);
     const [activeSessionId, setActiveSessionId] = useState(null);
     const [runningSessions, setRunningSessions] = useState(new Set()); // Track active timers
-
+    const [toBeDeletedId, setToBeDeletedId] = useState(null)
     useEffect(() => {
         window.api.onSessionStopped((stoppedId) => {
             setRunningSessions(prev => {
@@ -48,7 +51,7 @@ export default function App() {
     };
 
     const toggleSessionState = async (e, session) => {
-        e.stopPropagation(); // Prevent opening the form when just clicking play/stop
+        e.stopPropagation();
 
         const isRunning = runningSessions.has(session.id);
         if (isRunning) {
@@ -68,6 +71,15 @@ export default function App() {
         }
     };
 
+    const deleteSession = async (e, session) => {
+        e.stopPropagation();
+        setToBeDeletedId(session.id)
+        const newSessions = sessions.filter(s => s.id !== session.id)
+        setSessions(newSessions)
+        await window.api.saveData({ sessions: newSessions });
+        setToBeDeletedId(null)
+    }
+
     const activeSession = sessions.find(s => s.id === activeSessionId) || null;
 
     return (
@@ -85,7 +97,15 @@ export default function App() {
                 </Box>
                 <Divider />
                 <List>
-                    {sessions.map((session) => (
+                    <List>
+                        <ListItemButton selected={view === 'requests'} onClick={() => setView('requests')}>
+                            <ListItemText primary="Request Schedules" />
+                        </ListItemButton>
+                        <ListItemButton selected={view === 'cookies'} onClick={() => setView('cookies')}>
+                            <ListItemText primary="Cookie Manager" />
+                        </ListItemButton>
+                    </List>
+                    {view === 'requests' && sessions.map((session) => (
                         <ListItemButton
                             key={session.id}
                             selected={activeSessionId === session.id}
@@ -95,16 +115,20 @@ export default function App() {
                             <ListItemText
                                 primary={session.name}
                                 secondary={`${session.method} - ${session.intervalMs}ms`}
-                                primaryTypographyProps={{
-                                    color: runningSessions.has(session.id) ? 'success.main' : 'text.primary',
-                                    fontWeight: runningSessions.has(session.id) ? 'bold' : 'normal'
-                                }}
                             />
                             <IconButton
                                 onClick={(e) => toggleSessionState(e, session)}
                                 color={runningSessions.has(session.id) ? "error" : "success"}
                             >
                                 {runningSessions.has(session.id) ? <StopIcon /> : <PlayArrowIcon />}
+                            </IconButton>
+                            <IconButton
+                                onClick={(e) => deleteSession(e, session)}
+                                color="error"
+                                disabled={runningSessions.has(session.id)}
+                                loading={toBeDeletedId === session.id}
+                            >
+                                <DeleteIcon />
                             </IconButton>
                         </ListItemButton>
                     ))}
@@ -118,12 +142,14 @@ export default function App() {
                 </Fab>
             </Drawer>
             <Box component="main" sx={{ flexGrow: 1, p: 3, overflow: 'auto' }}>
-                <SessionForm
-                    key={activeSessionId || 'new'}
-                    session={activeSession}
-                    onSave={handleSaveSession}
-                />
-                <GlobalCookies />
+                {view === 'requests' ?
+                    <SessionForm
+                        key={activeSessionId || 'new'}
+                        session={activeSession}
+                        onSave={handleSaveSession}
+                    /> :
+                    <CookieManager />
+                }
                 <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
                     <LogConsole />
                 </Box>

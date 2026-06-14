@@ -5,7 +5,7 @@ import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import dayjs from 'dayjs';
-import { parseCurl } from './utils/parseCurl';
+import { convertObjectToArray } from './utils/helpers';
 
 export default function SessionForm({ session, onSave }) {
     const [rawCurl, setRawCurl] = useState('');
@@ -15,41 +15,52 @@ export default function SessionForm({ session, onSave }) {
             id: Date.now().toString(),
             name: 'New Session',
             url: '',
-            method: 'GET',
+            method: 'get',
             headers: [{ key: '', value: '' }],
-            body: '',
-            intervalMs: 5000, // default 5 seconds
-            startTime: null, // Stored as ISO string
-            endTime: null,    // Stored as ISO string
-            stopOnError: false // NEW: Default to false
+            body: [{ key: '', value: '' }],
+            intervalMs: 5000,
+            startTime: null,
+            endTime: null,
+            stopOnError: false,
+            cookies: [{ key: '', value: '' }]
         }
     });
 
-    const { fields, append, remove } = useFieldArray({ control, name: 'headers' });
+    const { fields: headerFields, append: appendHeader, remove: removeHeader } = useFieldArray({ control, name: 'headers' });
+    const { fields: cookieFields, append: appendCookie, remove: removeCookie } = useFieldArray({ control, name: "cookies" });
+    const { fields: bodyFields, append: appendBody, remove: removeBody } = useFieldArray({ control, name: "body" });
+    const handleCurlPaste = async (e) => {
 
-    const handleCurlPaste = (e) => {
+        if (!e.target.value) { setRawCurl(''); return }
         const pasted = e.target.value;
-        setRawCurl(pasted);
-        const parsed = parseCurl(pasted);
+        const result = await window.api.parseCurl(pasted);
+        console.log(result.data);
 
-        if (parsed) {
+        if (result.success) {
             reset({
-                ...control._defaultValues, // keep id and name
-                url: parsed.url,
-                method: parsed.method,
-                headers: parsed.headers,
-                body: parsed.body
+                ...control._defaultValues,
+                ...result.data,
+                body: convertObjectToArray(result.data.body),
+                cookies: Array.isArray(result.data.cookies) ? result.data.cookies.map(({name, value}) => ({key: name, value})) : convertObjectToArray(result.data.cookies),
+                id: Date.now().toString(),
+                name: 'Parsed Session',
             });
-            setRawCurl(''); // clear field after successful parse
+        } else {
+            alert("Invalid cURL: " + result.error);
         }
+        setRawCurl('')
     };
 
     const onSubmit = (data) => {
         onSave(data);
     };
+    const test = () => {
+        console.log(bodyFields);
 
+    }
     return (
-        <Box component="form" onSubmit={handleSubmit(onSubmit)} sx={{ p: 3, maxWidth: 800 }}>
+        <Box component="form" onSubmit={handleSubmit(onSubmit)} sx={{ p: 3 }}>
+            <Button onClick={test}>Click here</Button>
             <Stack spacing={3}>
                 <TextField
                     label="Paste cURL Command here to auto-fill"
@@ -92,6 +103,10 @@ export default function SessionForm({ session, onSave }) {
                             control={control}
                             render={({ field }) => (
                                 <DateTimePicker
+                                    disablePast
+                                    ampm={false}
+                                    views={['year', 'month', 'day', 'hours', 'minutes', 'seconds']}
+                                    timeSteps={{ hours: 1, minutes: 1, seconds: 1 }}
                                     label="Start Time (Leave blank for 'Now')"
                                     value={field.value ? dayjs(field.value) : null}
                                     onChange={(newValue) => field.onChange(newValue ? newValue.toISOString() : null)}
@@ -104,6 +119,10 @@ export default function SessionForm({ session, onSave }) {
                             control={control}
                             render={({ field }) => (
                                 <DateTimePicker
+                                    disablePast
+                                    ampm={false}
+                                    views={['year', 'month', 'day', 'hours', 'minutes', 'seconds']}
+                                    timeSteps={{ hours: 1, minutes: 1, seconds: 1 }}
                                     label="End Time (Leave blank for 'Never')"
                                     value={field.value ? dayjs(field.value) : null}
                                     onChange={(newValue) => field.onChange(newValue ? newValue.toISOString() : null)}
@@ -121,7 +140,7 @@ export default function SessionForm({ session, onSave }) {
                         render={({ field }) => (
                             <TextField {...field} select label="Method" sx={{ width: 120 }}>
                                 {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => (
-                                    <MenuItem key={m} value={m}>{m}</MenuItem>
+                                    <MenuItem key={m} value={m.toLowerCase()}>{m}</MenuItem>
                                 ))}
                             </TextField>
                         )}
@@ -136,8 +155,8 @@ export default function SessionForm({ session, onSave }) {
                 <Paper variant="outlined" sx={{ p: 2 }}>
                     <Typography variant="subtitle2" sx={{ mb: 2 }}>Headers</Typography>
                     <Stack spacing={2}>
-                        {fields.map((item, index) => (
-                            <Stack direction="row" spacing={2} key={item.id} alignItems="center">
+                        {headerFields.map((item, index) => (
+                            <Stack direction="row" spacing={2} key={item.id} sx={{ alignItems: 'center' }}>
                                 <Controller
                                     name={`headers.${index}.key`}
                                     control={control}
@@ -148,15 +167,71 @@ export default function SessionForm({ session, onSave }) {
                                     control={control}
                                     render={({ field }) => <TextField {...field} label="Value" size="small" fullWidth />}
                                 />
-                                <IconButton onClick={() => remove(index)} color="error" size="small">
+                                <IconButton onClick={() => removeHeader(index)} color="error" size="small">
                                     <DeleteIcon />
                                 </IconButton>
                             </Stack>
                         ))}
                     </Stack>
-                    <Button startIcon={<AddIcon />} onClick={() => append({ key: '', value: '' })} sx={{ mt: 2 }} size="small">
+                    <Button startIcon={<AddIcon />} onClick={() => appendHeader({ key: '', value: '' })} sx={{ mt: 2 }} size="small">
                         Add Header
                     </Button>
+                    <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Session Cookies</Typography>
+                    <Stack spacing={1}>
+                        {cookieFields.map((field, index) => (
+                            <Stack direction="row" spacing={1} key={field.id}>
+                                <Controller
+                                    name={`cookies.${index}.key`}
+                                    control={control}
+                                    render={({ field }) => <TextField {...field} label="Key" size="small" fullWidth />}
+                                />
+                                <Controller
+                                    name={`cookies.${index}.value`}
+                                    control={control}
+                                    render={({ field }) => <TextField {...field} label="Value" size="small" fullWidth />}
+                                />
+                                <IconButton onClick={() => removeCookie(index)} color="error">
+                                    <DeleteIcon />
+                                </IconButton>
+                            </Stack>
+                        ))}
+                        <Button
+                            startIcon={<AddIcon />}
+                            onClick={() => appendCookie({ name: '', value: '' })}
+                            variant="outlined"
+                            sx={{ alignSelf: 'flex-start' }}
+                        >
+                            Add Cookie
+                        </Button>
+                    </Stack>
+                    <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Body fields</Typography>
+                    <Stack spacing={1}>
+                        {bodyFields.map((field, index) => (
+                            <Stack direction="row" spacing={1} key={field.key}>
+                                <Controller
+                                    name={`body.${index}.key`}
+                                    control={control}
+                                    render={({ field }) => <TextField {...field} label="Key" size="small" fullWidth />}
+                                />
+                                <Controller
+                                    name={`body.${index}.value`}
+                                    control={control}
+                                    render={({ field }) => <TextField {...field} label="Value" size="small" fullWidth />}
+                                />
+                                <IconButton onClick={() => removeBody(index)} color="error">
+                                    <DeleteIcon />
+                                </IconButton>
+                            </Stack>
+                        ))}
+                        <Button
+                            startIcon={<AddIcon />}
+                            onClick={() => appendBody({ key: '', value: '' })}
+                            variant="outlined"
+                            sx={{ alignSelf: 'flex-start' }}
+                        >
+                            Add Field
+                        </Button>
+                    </Stack>
                 </Paper>
 
                 <Button type="submit" variant="contained" size="large">Save Session</Button>

@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('api', {
   onLog: (callback) => {
     ipcRenderer.on('backend-log', (event, logData) => callback(logData));
   },
+  getCookies: () => ipcRenderer.invoke('get-cookies'),
+  removeCookie: (data) => ipcRenderer.invoke('remove-cookie', data),
+  parseCurl: (curlString) => ipcRenderer.invoke('parse-curl', curlString),
   onSessionStopped: (callback) => {
     ipcRenderer.on('session-stopped', (event, { sessionId }) => callback(sessionId));
   },
