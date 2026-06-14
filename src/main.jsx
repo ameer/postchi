@@ -6,7 +6,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 
 const darkTheme = createTheme({
-  palette: { mode: 'dark' },
+  palette: { mode: 'dark', background: {default: '#1e1e1e'} },
 });
 
 ReactDOM.createRoot(document.getElementById('root')).render(

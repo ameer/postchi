@@ -15,6 +15,13 @@ export default function App() {
     const [runningSessions, setRunningSessions] = useState(new Set()); // Track active timers
 
     useEffect(() => {
+        window.api.onSessionStopped((stoppedId) => {
+            setRunningSessions(prev => {
+                const next = new Set(prev);
+                next.delete(stoppedId);
+                return next;
+            });
+        });
         const loadState = async () => {
             const data = await window.api.loadData();
             if (data && data.sessions) {

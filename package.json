@@ -7,7 +7,26 @@
   "scripts": {
     "vite:dev": "vite",
     "electron:dev": "electron .",
-    "dev": "concurrently \"npm run vite:dev\" \"npm run electron:dev\""
+    "dev": "concurrently \"npm run vite:dev\" \"npm run electron:dev\"",
+    "build": "vite build && electron-builder"
+  },
+  "build": {
+    "appId": "ir.ameer.postchi",
+    "productName": "Postchi",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "keywords": [],
   "author": "",
@@ -27,6 +46,7 @@
     "@mui/x-date-pickers": "^9.5.0",
     "consola": "^3.4.2",
     "dayjs": "^1.11.21",
+    "lottie-web": "^5.13.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.79.0"

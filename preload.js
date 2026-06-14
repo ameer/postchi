@@ -8,5 +8,8 @@ contextBridge.exposeInMainWorld('api', {
   setGlobalCookies: (data) => ipcRenderer.invoke('set-global-cookies', data),
   onLog: (callback) => {
     ipcRenderer.on('backend-log', (event, logData) => callback(logData));
-  }
+  },
+  onSessionStopped: (callback) => {
+    ipcRenderer.on('session-stopped', (event, { sessionId }) => callback(sessionId));
+  },
 });
