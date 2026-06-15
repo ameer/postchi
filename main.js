@@ -1,11 +1,5 @@
 const { app, BrowserWindow, ipcMain, net, session } = require('electron');
-const { autoUpdater } = require("electron-updater");
 
-// Configure logging (helpful for debugging updates)
-autoUpdater.logger = require("electron-log");
-autoUpdater.logger.transports.file.level = "info";
-
-const curlconverter = require('curlconverter');
 const path = require('path');
 const fs = require('fs');
 const { createConsola } = require('consola');
@@ -35,7 +29,6 @@ function createWindow() {
     } else {
         win.loadURL('http://localhost:5173');
     }
-    autoUpdater.checkForUpdatesAndNotify();
 }
 
 app.whenReady().then(createWindow);
@@ -58,35 +51,100 @@ function clearSchedule(sessionId, webContents) {
 }
 
 // --- IPC Handlers for Parsing and Data Persistence ---
+function parseCookieString(str, cookiesArray) {
+    str.split(';').forEach(p => {
+        const [name, ...val] = p.split('=');
+        if (name && name.trim()) {
+            cookiesArray.push({
+                name: name.trim(),
+                value: val.join('=').trim().replace(/^['"]|['"]$/g, '')
+            });
+        }
+    });
+}
+function parseNativeCurlCommand(curlString) {
+    // Standardize multi-line breaks out of standard terminal captures
+    const cleanCurl = curlString.replace(/\\\r?\n/g, ' ').trim();
 
+    const args = [];
+    let current = '';
+    let inQuotes = false;
+    let quoteChar = null;
+
+    // Tokenize string while preserving shell quote groupings
+    for (let i = 0; i < cleanCurl.length; i++) {
+        const char = cleanCurl[i];
+        if ((char === '"' || char === "'") && (i === 0 || cleanCurl[i - 1] !== '\\')) {
+            if (inQuotes && char === quoteChar) {
+                inQuotes = false;
+                quoteChar = null;
+            } else if (!inQuotes) {
+                inQuotes = true;
+                quoteChar = char;
+            } else {
+                current += char;
+            }
+        } else if (char === ' ' && !inQuotes) {
+            if (current) {
+                args.push(current);
+                current = '';
+            }
+        } else {
+            current += char;
+        }
+    }
+    if (current) args.push(current);
+
+    let url = '';
+    let method = 'GET';
+    const headers = [];
+    let body = '';
+    const cookies = [];
+
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === 'curl') continue;
+
+        if (arg === '-X' || arg === '--request') {
+            method = args[++i]?.toUpperCase() || 'GET';
+        } else if (arg === '-H' || arg === '--header') {
+            const headerStr = args[++i] || '';
+            const colonIdx = headerStr.indexOf(':');
+            if (colonIdx !== -1) {
+                const key = headerStr.substring(0, colonIdx).trim();
+                const value = headerStr.substring(colonIdx + 1).trim();
+                if (key.toLowerCase() === 'cookie') {
+                    parseCookieString(value, cookies);
+                } else {
+                    headers.push({ key, value });
+                }
+            }
+        } else if (arg === '-b' || arg === '--cookie') {
+            const cookieStr = args[++i] || '';
+            parseCookieString(cookieStr, cookies);
+        } else if (['-d', '--data', '--data-raw', '--data-binary'].includes(arg)) {
+            body = args[++i] || '';
+            if (method === 'GET') method = 'POST'; // cURL switches to POST implicitly when payload properties exist
+        } else if (!arg.startsWith('-')) {
+            if (!url || arg.startsWith('http://') || arg.startsWith('https://')) {
+                url = arg.replace(/^['"]|['"]$/g, '');
+            }
+        }
+    }
+
+    return { url, method, headers, body, cookies };
+}
 ipcMain.handle('parse-curl', async (event, curlString) => {
     try {
-        const parsed = curlconverter.toJsonObject(curlString);
-
-        const headers = parsed.headers
-            ? Object.entries(parsed.headers).map(([key, value]) => ({ key, value }))
-            : [];
-
-        const body = parsed.data || parsed.dataRaw || parsed.dataBinary || '';
-
-        let cookies = [];
-        if (parsed.cookies) {
-            cookies = Object.entries(parsed.cookies).map(([name, value]) => ({ name, value }));
-        } else if (parsed.headers && parsed.headers['Cookie']) {
-            cookies = parsed.headers['Cookie'].split(';').map(p => {
-                const [name, ...val] = p.split('=');
-                return { name: name.trim(), value: val.join('=').trim() };
-            }).filter(c => c.name);
-        }
-
+        const parsed = parseNativeCurlCommand(curlString);
         return {
             success: true,
             data: {
                 url: parsed.url,
-                method: parsed.method || 'GET',
-                headers: headers,
-                body: typeof body === 'object' ? JSON.stringify(body) : body,
-                cookies: cookies
+                method: parsed.method,
+                headers: parsed.headers,
+                body: parsed.body,
+                cookies: parsed.cookies
             }
         };
     } catch (error) {
@@ -163,7 +221,9 @@ ipcMain.handle('start-session', async (event, sessionConfig) => {
     const now = Date.now();
     const startTime = sessionConfig.startTime ? new Date(sessionConfig.startTime).getTime() : now;
     const endTime = sessionConfig.endTime ? new Date(sessionConfig.endTime).getTime() : null;
-    const intervalMs = (sessionConfig.interval || 1) * 1000;
+    
+    // FIX 1: Read the correct form parameter interval property explicitly safely
+    const intervalMs = sessionConfig.intervalMs ? Number(sessionConfig.intervalMs) : 5000;
 
     if (endTime && endTime <= now) {
         return { success: false, error: 'Specified expiration runtime context is set in the past.' };
@@ -174,14 +234,13 @@ ipcMain.handle('start-session', async (event, sessionConfig) => {
     const executeRequest = async () => {
         logger.start(`[${sessionConfig.name}] Dispatching runner to destination target: ${sessionConfig.url}`);
 
-        // Extract native jar cookies + explicitly passed specific session configurations
         const globalCookies = await session.defaultSession.cookies.get({ url: sessionConfig.url });
         let cookieMap = new Map();
         globalCookies.forEach(c => cookieMap.set(c.name, c.value));
 
         if (sessionConfig.cookies && Array.isArray(sessionConfig.cookies)) {
             sessionConfig.cookies.forEach(c => {
-                if (c.name) cookieMap.set(c.name, c.value);
+                if (c.key) cookieMap.set(c.key, c.value); // Map form schema correctly
             });
         }
 
@@ -189,41 +248,43 @@ ipcMain.handle('start-session', async (event, sessionConfig) => {
             .map(([name, value]) => `${name}=${value}`)
             .join('; ');
 
-        const request = net.request({ method: sessionConfig.method, url: sessionConfig.url });
+        const request = net.request({ method: sessionConfig.method.toUpperCase(), url: sessionConfig.url });
 
         if (cookieString) {
             request.setHeader('Cookie', cookieString);
         }
 
+        // Keep track of user headers
+        let hasContentType = false;
         if (sessionConfig.headers) {
             sessionConfig.headers.forEach(h => {
-                if (h.key && h.value) request.setHeader(h.key, h.value);
+                if (h.key && h.value) {
+                    request.setHeader(h.key, h.value);
+                    if (h.key.toLowerCase() === 'content-type') hasContentType = true;
+                }
             });
         }
 
-        // FIXED: Robust payload handling with explicit content size boundary checks
+        // FIX 3: Robust nested payload execution checking configurations safely
         if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(sessionConfig.method.toUpperCase()) && sessionConfig.body) {
             let bodyData = sessionConfig.body;
+            
+            // If body is passing down a raw string, use it directly
             if (typeof bodyData === 'object') {
-                bodyData = bodyData.reduce((acc, curr) => {
-                    acc[curr.key] = curr.value
-                    return acc
-                }, {})
-                bodyData = JSON.stringify(bodyData)
-                console.log(bodyData);
-                
+                bodyData = JSON.stringify(bodyData);
             }
-            // Safely stream string chunks into standard request channel mapping
+
+            // Auto-inject JSON application header safely if the user has omitted it
+            if (!hasContentType && bodyData.trim().startsWith('{')) {
+                request.setHeader('Content-Type', 'application/json');
+            }
+
             request.write(bodyData, 'utf-8');
         }
 
         request.on('response', (response) => {
             let responseData = '';
-
-            response.on('data', (chunk) => {
-                responseData += chunk;
-            });
-
+            response.on('data', (chunk) => { responseData += chunk; });
             response.on('end', () => {
                 logger.info(`[${sessionConfig.name}] Response code verification completed: ${response.statusCode}`);
                 event.sender.send('backend-log', {
@@ -234,26 +295,22 @@ ipcMain.handle('start-session', async (event, sessionConfig) => {
                 });
 
                 if (sessionConfig.stopOnError && response.statusCode >= 400) {
-                    logger.error(`[${sessionConfig.name}] Halting sequence prematurely due to status error rule validation constraint.`);
                     clearSchedule(sessionConfig.id, event.sender);
                 }
             });
         });
 
         request.on('error', (err) => {
-            logger.error(`[${sessionConfig.name}] Active runtime instance context experienced an execution break:`, err);
+            logger.error(`[${sessionConfig.name}] Active runtime instance experienced execution failure:`, err);
             event.sender.send('backend-log', {
                 type: 'error',
                 message: `[${sessionConfig.name}] Critical network failure: ${err.message}`,
                 timestamp: Date.now(),
                 sessionId: sessionConfig.id
             });
-            if (sessionConfig.stopOnError) {
-                clearSchedule(sessionConfig.id, event.sender);
-            }
+            if (sessionConfig.stopOnError) clearSchedule(sessionConfig.id, event.sender);
         });
 
-        // Fire request sequence context
         request.end();
     };
 
@@ -268,10 +325,9 @@ ipcMain.handle('start-session', async (event, sessionConfig) => {
         beginInterval();
     } else {
         const delaySecs = Math.round(timeUntilStart / 1000);
-        logger.info(`Sequence validation checklist clear: execution profiles armed for launch target window in ${delaySecs}s`);
         event.sender.send('backend-log', {
             type: 'info',
-            message: `Armed: Loop execution will start automatically in execution delay interval matching ${delaySecs}s`,
+            message: `Armed: Loop execution will start automatically in ${delaySecs}s`,
             timestamp: Date.now(),
             sessionId: sessionConfig.id
         });
@@ -280,7 +336,6 @@ ipcMain.handle('start-session', async (event, sessionConfig) => {
 
     if (endTime) {
         scheduleState.endTimeout = setTimeout(() => {
-            logger.success(`Maximum lifecycle bound reached for schedule item ${sessionConfig.name}. Safely teardown thread allocations.`);
             clearSchedule(sessionConfig.id, event.sender);
         }, endTime - now);
     }

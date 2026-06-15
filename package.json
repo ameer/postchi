@@ -1,6 +1,6 @@
 {
   "name": "postchi",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "",
   "main": "main.js",
   "type": "commonjs",
@@ -20,7 +20,7 @@
     "publish": {
       "provider": "github",
       "owner": "ameer",
-      "repo": "YOUR_REPO_NAME"
+      "repo": "postchi"
     },
     "files": [
       "dist/**/*",
@@ -44,15 +44,15 @@
     "vite": "^8.0.16"
   },
   "dependencies": {
+    "@codemirror/lang-json": "^6.0.2",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^9.1.1",
     "@mui/material": "^9.1.1",
     "@mui/x-date-pickers": "^9.5.0",
+    "@uiw/react-codemirror": "^4.25.10",
     "consola": "^3.4.2",
-    "curlconverter": "^4.12.0",
     "dayjs": "^1.11.21",
-    "electron-updater": "^6.8.9",
     "lottie-web": "^5.13.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

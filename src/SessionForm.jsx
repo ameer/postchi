@@ -1,71 +1,147 @@
 import React, { useState } from 'react';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
-import { Box, Button, TextField, IconButton, Stack, Typography, Paper, MenuItem, FormControlLabel, Switch } from '@mui/material';
+import { Box, Button, TextField, IconButton, Stack, Typography, Paper, MenuItem, FormControlLabel, Switch, Alert } from '@mui/material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
+import FormatLeftIcon from '@mui/icons-material/FormatIndentIncrease';
 import dayjs from 'dayjs';
-import { convertObjectToArray } from './utils/helpers';
+import CodeMirror from '@uiw/react-codemirror';
+import { json } from '@codemirror/lang-json';
 
 export default function SessionForm({ session, onSave }) {
     const [rawCurl, setRawCurl] = useState('');
+    const [jsonError, setJsonError] = useState(null);
 
-    const { control, handleSubmit, reset } = useForm({
-        defaultValues: session || {
-            id: Date.now().toString(),
-            name: 'New Session',
-            url: '',
-            method: 'get',
-            headers: [{ key: '', value: '' }],
-            body: [{ key: '', value: '' }],
-            intervalMs: 5000,
-            startTime: null,
-            endTime: null,
-            stopOnError: false,
-            cookies: [{ key: '', value: '' }]
+    // Baseline clean schema shape tracking
+    const fallbackDefaultValues = {
+        id: Date.now().toString(),
+        name: 'New Session',
+        url: '',
+        method: 'GET',
+        headers: [{ key: '', value: '' }],
+        body: '', // Switched from array to string representation schema
+        intervalMs: 5000,
+        startTime: null,
+        endTime: null,
+        stopOnError: false,
+        cookies: [{ key: '', value: '' }]
+    };
+    const getNormalizedDefaultValues = () => {
+        if (!session) return fallbackDefaultValues;
+
+        let normalizedBody = session.body;
+
+        // If the saved session body is an object or array, safely stringify it
+        if (normalizedBody && typeof normalizedBody === 'object') {
+            try {
+                normalizedBody = JSON.stringify(normalizedBody, null, 2);
+            } catch (e) {
+                normalizedBody = '';
+            }
+        } else if (normalizedBody === undefined || normalizedBody === null) {
+            normalizedBody = '';
         }
+
+        return {
+            ...fallbackDefaultValues,
+            ...session,
+            body: normalizedBody // Ensured to be a string
+        };
+    };
+    const { control, handleSubmit, reset, watch, setValue } = useForm({
+        defaultValues: getNormalizedDefaultValues()
     });
+
+    const currentMethod = watch('method');
+    const currentBody = watch('body');
 
     const { fields: headerFields, append: appendHeader, remove: removeHeader } = useFieldArray({ control, name: 'headers' });
     const { fields: cookieFields, append: appendCookie, remove: removeCookie } = useFieldArray({ control, name: "cookies" });
-    const { fields: bodyFields, append: appendBody, remove: removeBody } = useFieldArray({ control, name: "body" });
-    const handleCurlPaste = async (e) => {
 
-        if (!e.target.value) { setRawCurl(''); return }
+    // Validate real-time format shifts safely
+    React.useEffect(() => {
+        if (!currentBody) {
+            setJsonError(null);
+            return;
+        }
+        try {
+            JSON.parse(currentBody);
+            setJsonError(null);
+        } catch (e) {
+            setJsonError(`Malformed JSON syntax: ${e.message}`);
+        }
+    }, [currentBody]);
+    React.useEffect(() => {
+        reset(getNormalizedDefaultValues());
+    }, [session, reset]);
+    const handleCurlPaste = async (e) => {
         const pasted = e.target.value;
+        if (!pasted) { setRawCurl(''); return; }
+
         const result = await window.api.parseCurl(pasted);
-        console.log(result.data);
 
         if (result.success) {
+            let processedBody = result.data.body || '';
+
+            // Auto-format body payloads immediately if clean JSON signatures match
+            try {
+                if (typeof processedBody === 'string' && processedBody.trim().startsWith('{')) {
+                    processedBody = JSON.stringify(JSON.parse(processedBody), null, 2);
+                }
+            } catch (err) {
+                // Fail silently and keep fallback text parameters
+            }
+
             reset({
-                ...control._defaultValues,
-                ...result.data,
-                body: convertObjectToArray(result.data.body),
-                cookies: Array.isArray(result.data.cookies) ? result.data.cookies.map(({name, value}) => ({key: name, value})) : convertObjectToArray(result.data.cookies),
                 id: Date.now().toString(),
                 name: 'Parsed Session',
+                url: result.data.url || '',
+                method: result.data.method || 'GET',
+                headers: result.data.headers || [],
+                cookies: Array.isArray(result.data.cookies)
+                    ? result.data.cookies.map(({ name, value }) => ({ key: name, value }))
+                    : [],
+                body: processedBody,
+                intervalMs: 5000,
+                stopOnError: false,
+                startTime: null,
+                endTime: null
             });
         } else {
-            alert("Invalid cURL: " + result.error);
+            alert("Invalid cURL sequence data structure verification rule mismatch: " + result.error);
         }
-        setRawCurl('')
+        setRawCurl('');
+    };
+
+    const handleBeautifyJSON = () => {
+        try {
+            if (currentBody && currentBody.trim()) {
+                const formatted = JSON.stringify(JSON.parse(currentBody), null, 2);
+                setValue('body', formatted, { shouldValidate: true });
+                setJsonError(null);
+            }
+        } catch (e) {
+            setJsonError("Formatting aborted. Fix current syntax configurations first.");
+        }
     };
 
     const onSubmit = (data) => {
+        if (jsonError && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(data.method.toUpperCase())) {
+            if (!confirm("Your request payload body contains bad syntax layout rules. Save anyway?")) return;
+        }
         onSave(data);
     };
-    const test = () => {
-        console.log(bodyFields);
 
-    }
+    const showBodyInput = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(currentMethod?.toUpperCase());
+
     return (
         <Box component="form" onSubmit={handleSubmit(onSubmit)} sx={{ p: 3 }}>
-            <Button onClick={test}>Click here</Button>
             <Stack spacing={3}>
                 <TextField
                     label="Paste cURL Command here to auto-fill"
                     multiline
-                    rows={3}
+                    rows={2}
                     value={rawCurl}
                     onChange={handleCurlPaste}
                     placeholder="curl 'https://api.example.com' -H 'Authorization: Bearer ...'"
@@ -95,6 +171,7 @@ export default function SessionForm({ session, onSave }) {
                         )}
                     />
                 </Stack>
+
                 <Paper variant="outlined" sx={{ p: 2 }}>
                     <Typography variant="subtitle2" sx={{ mb: 2 }}>Schedule Rules (Optional)</Typography>
                     <Stack direction="row" spacing={2}>
@@ -105,8 +182,6 @@ export default function SessionForm({ session, onSave }) {
                                 <DateTimePicker
                                     disablePast
                                     ampm={false}
-                                    views={['year', 'month', 'day', 'hours', 'minutes', 'seconds']}
-                                    timeSteps={{ hours: 1, minutes: 1, seconds: 1 }}
                                     label="Start Time (Leave blank for 'Now')"
                                     value={field.value ? dayjs(field.value) : null}
                                     onChange={(newValue) => field.onChange(newValue ? newValue.toISOString() : null)}
@@ -121,8 +196,6 @@ export default function SessionForm({ session, onSave }) {
                                 <DateTimePicker
                                     disablePast
                                     ampm={false}
-                                    views={['year', 'month', 'day', 'hours', 'minutes', 'seconds']}
-                                    timeSteps={{ hours: 1, minutes: 1, seconds: 1 }}
                                     label="End Time (Leave blank for 'Never')"
                                     value={field.value ? dayjs(field.value) : null}
                                     onChange={(newValue) => field.onChange(newValue ? newValue.toISOString() : null)}
@@ -138,9 +211,9 @@ export default function SessionForm({ session, onSave }) {
                         name="method"
                         control={control}
                         render={({ field }) => (
-                            <TextField {...field} select label="Method" sx={{ width: 120 }}>
+                            <TextField {...field} select label="Method" sx={{ width: 140 }}>
                                 {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => (
-                                    <MenuItem key={m} value={m.toLowerCase()}>{m}</MenuItem>
+                                    <MenuItem key={m} value={m}>{m}</MenuItem>
                                 ))}
                             </TextField>
                         )}
@@ -153,8 +226,9 @@ export default function SessionForm({ session, onSave }) {
                 </Stack>
 
                 <Paper variant="outlined" sx={{ p: 2 }}>
-                    <Typography variant="subtitle2" sx={{ mb: 2 }}>Headers</Typography>
-                    <Stack spacing={2}>
+                    {/* Headers Management Group */}
+                    <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>Headers</Typography>
+                    <Stack spacing={1.5}>
                         {headerFields.map((item, index) => (
                             <Stack direction="row" spacing={2} key={item.id} sx={{ alignItems: 'center' }}>
                                 <Controller
@@ -173,68 +247,108 @@ export default function SessionForm({ session, onSave }) {
                             </Stack>
                         ))}
                     </Stack>
-                    <Button startIcon={<AddIcon />} onClick={() => appendHeader({ key: '', value: '' })} sx={{ mt: 2 }} size="small">
+                    <Button startIcon={<AddIcon />} onClick={() => appendHeader({ key: '', value: '' })} sx={{ mt: 1.5 }} size="small" variant="outlined">
                         Add Header
                     </Button>
-                    <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Session Cookies</Typography>
-                    <Stack spacing={1}>
+
+                    {/* Cookie Management Group */}
+                    <Typography variant="subtitle2" sx={{ mt: 3, mb: 2, fontWeight: 'bold' }}>Session Specific Cookies</Typography>
+                    <Stack spacing={1.5}>
                         {cookieFields.map((field, index) => (
-                            <Stack direction="row" spacing={1} key={field.id}>
+                            <Stack direction="row" spacing={2} key={field.id} sx={{ alignItems: 'center' }}>
                                 <Controller
                                     name={`cookies.${index}.key`}
                                     control={control}
-                                    render={({ field }) => <TextField {...field} label="Key" size="small" fullWidth />}
+                                    render={({ field }) => <TextField {...field} label="Cookie Name" size="small" fullWidth />}
                                 />
                                 <Controller
                                     name={`cookies.${index}.value`}
                                     control={control}
                                     render={({ field }) => <TextField {...field} label="Value" size="small" fullWidth />}
                                 />
-                                <IconButton onClick={() => removeCookie(index)} color="error">
+                                <IconButton onClick={() => removeCookie(index)} color="error" size="small">
                                     <DeleteIcon />
                                 </IconButton>
                             </Stack>
                         ))}
-                        <Button
-                            startIcon={<AddIcon />}
-                            onClick={() => appendCookie({ name: '', value: '' })}
-                            variant="outlined"
-                            sx={{ alignSelf: 'flex-start' }}
-                        >
-                            Add Cookie
-                        </Button>
                     </Stack>
-                    <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Body fields</Typography>
-                    <Stack spacing={1}>
-                        {bodyFields.map((field, index) => (
-                            <Stack direction="row" spacing={1} key={field.key}>
-                                <Controller
-                                    name={`body.${index}.key`}
-                                    control={control}
-                                    render={({ field }) => <TextField {...field} label="Key" size="small" fullWidth />}
-                                />
-                                <Controller
-                                    name={`body.${index}.value`}
-                                    control={control}
-                                    render={({ field }) => <TextField {...field} label="Value" size="small" fullWidth />}
-                                />
-                                <IconButton onClick={() => removeBody(index)} color="error">
-                                    <DeleteIcon />
-                                </IconButton>
+                    <Button startIcon={<AddIcon />} onClick={() => appendCookie({ key: '', value: '' })} sx={{ mt: 1.5 }} size="small" variant="outlined">
+                        Add Cookie
+                    </Button>
+
+                    {/* Unified Postman-Style JSON Payload Field */}
+                    {showBodyInput && (
+                        <Box sx={{ mt: 4 }}>
+                            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+                                    Body Payload Raw (JSON Configuration)
+                                </Typography>
+                                <Button
+                                    size="small"
+                                    variant="text"
+                                    startIcon={<FormatLeftIcon />}
+                                    onClick={handleBeautifyJSON}
+                                    disabled={!currentBody}
+                                >
+                                    Prettify JSON
+                                </Button>
                             </Stack>
-                        ))}
-                        <Button
-                            startIcon={<AddIcon />}
-                            onClick={() => appendBody({ key: '', value: '' })}
-                            variant="outlined"
-                            sx={{ alignSelf: 'flex-start' }}
-                        >
-                            Add Field
-                        </Button>
-                    </Stack>
+
+                            <Paper
+                                variant="outlined"
+                                sx={{
+                                    overflow: 'hidden',
+                                    borderColor: jsonError ? 'error.main' : 'divider',
+                                    '& .cm-editor': {
+                                        fontFamily: 'Consolas, Monaco, monospace',
+                                        fontSize: '0.9rem',
+                                        backgroundColor: 'background.paper',
+                                    },
+                                    '& .cm-gutters': {
+                                        backgroundColor: 'action.hover',
+                                        borderRight: '1px solid',
+                                        borderColor: 'divider',
+                                        color: 'text.secondary'
+                                    }
+                                }}
+                            >
+                                <Controller
+                                    name="body"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <CodeMirror
+                                            value={typeof field.value === 'string' ? field.value : ''}
+                                            height="250px"
+                                            extensions={[json()]}
+                                            onChange={(value) => field.onChange(value)}
+                                            placeholder='{\n  "key": "value"\n}'
+                                            theme="dark" // Switch to "dark" if your app uses a dark theme layout
+                                            basicSetup={{
+                                                lineNumbers: true,
+                                                foldGutter: true,
+                                                dropCursor: true,
+                                                allowMultipleSelections: false,
+                                                indentOnInput: true,
+                                                bracketMatching: true,
+                                                closeBrackets: true,
+                                                autocompletion: true,
+                                                highlightActiveLine: true
+                                            }}
+                                        />
+                                    )}
+                                />
+                            </Paper>
+
+                            {jsonError && (
+                                <Alert severity="warning" sx={{ mt: 1, py: 0 }}>
+                                    {jsonError}
+                                </Alert>
+                            )}
+                        </Box>
+                    )}
                 </Paper>
 
-                <Button type="submit" variant="contained" size="large">Save Session</Button>
+                <Button type="submit" variant="contained" size="large" color="primary">Save Session Configuration</Button>
             </Stack>
         </Box>
     );
